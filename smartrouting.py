@@ -1,9 +1,9 @@
 """
 Smart Routing + SLA Demo
-Streamlit UI only version (with chart for lead distribution)
+Streamlit UI only version (without external autorefresh dependency)
 
 How to run locally:
-  pip install streamlit streamlit-autorefresh pandas numpy
+  pip install streamlit pandas numpy plotly
   streamlit run main.py
 """
 
@@ -12,7 +12,6 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import streamlit as st
-from streamlit_autorefresh import st_autorefresh
 import plotly.express as px
 
 # --------------------------
@@ -114,7 +113,6 @@ def simulate_realtime_lead():
 
 def run_app():
     st.set_page_config(page_title="Smart Routing + SLA", layout="wide")
-    st_autorefresh(interval=10 * 1000, key="auto_refresh")
 
     # Sidebar
     st.sidebar.header("➕ Add Lead Manually")
@@ -127,10 +125,6 @@ def run_app():
     if st.sidebar.button("Inject Random Lead Now"):
         simulate_realtime_lead()
         st.sidebar.info("📥 Random lead injected.")
-
-    # Auto inject with small probability
-    if random.random() < 0.2:
-        simulate_realtime_lead()
 
     # SLA monitoring
     check_sla()
