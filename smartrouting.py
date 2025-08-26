@@ -1,6 +1,6 @@
 """
 Smart Routing + SLA Demo
-Streamlit UI only version (without external autorefresh dependency)
+Streamlit UI only version (with round-robin routing)
 
 How to run locally:
   pip install streamlit pandas numpy plotly
@@ -38,27 +38,29 @@ if "leads" not in st.session_state:
     st.session_state.leads = []
 if "agent_load" not in st.session_state:
     st.session_state.agent_load = {agent["name"]: [] for agent in AGENTS}
+if "round_robin_index" not in st.session_state:
+    st.session_state.round_robin_index = 0
 
 # --------------------------
-# Routing Logic
+# Routing Logic (Round Robin)
 # --------------------------
 def route_lead(lead_type: str):
-    # Hot → Top Sales priority
-    if lead_type == "Hot":
-        for agent in ["Sarah", "John"]:
-            if len(st.session_state.agent_load[agent]) < AGENT_CAPACITY:
-                return agent
+    num_agents = len(AGENTS) - 1  # exclude AI agent
+    attempts = 0
 
-    # Try Customer Service
-    for agent in ["Amy", "David", "Lisa", "Mike"]:
+    while attempts < num_agents:
+        agent = AGENTS[st.session_state.round_robin_index]["name"]
+        st.session_state.round_robin_index = (st.session_state.round_robin_index + 1) % num_agents
+
         if len(st.session_state.agent_load[agent]) < AGENT_CAPACITY:
             return agent
 
-    # All full
+        attempts += 1
+
+    # All full → Cold → AI, Hot/Warm → least loaded human
     if lead_type == "Cold":
         return "AI Agent"
 
-    # Warm/Hot → least loaded human
     human_loads = {a["name"]: len(st.session_state.agent_load[a["name"]]) for a in AGENTS if a["type"] != "ai"}
     return min(human_loads, key=human_loads.get)
 
@@ -131,6 +133,8 @@ def run_app():
 
     # Dashboard
     st.title("🤖 Smart Routing + SLA Dashboard")
+
+    st.markdown(f"**🔄 Next Agent in Round-Robin:** {AGENTS[st.session_state.round_robin_index]['name']}")
 
     if st.session_state.leads:
         df = pd.DataFrame(st.session_state.leads)
