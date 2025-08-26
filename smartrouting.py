@@ -21,7 +21,7 @@ AGENT_CAPACITY = 5
 
 AGENTS = [
     {"name": "Sarah", "type": "top_sales", "capacity": AGENT_CAPACITY},
-    {"name": "John", "type": "top_sales", "capacity": AGENT_CAPACITY},
+    {"name": "John", "type": "customer_service", "capacity": AGENT_CAPACITY},
     {"name": "Amy", "type": "customer_service", "capacity": AGENT_CAPACITY},
     {"name": "David", "type": "customer_service", "capacity": AGENT_CAPACITY},
     {"name": "Lisa", "type": "customer_service", "capacity": AGENT_CAPACITY},
@@ -471,3 +471,4 @@ def run_app():
 
 if __name__ == "__main__":
     run_app()
+
