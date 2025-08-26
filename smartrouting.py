@@ -21,7 +21,7 @@ AGENT_CAPACITY = 5
 
 AGENTS = [
     {"name": "Sarah", "type": "top_sales", "capacity": AGENT_CAPACITY},
-    {"name": "John", "type": "customer_service", "capacity": AGENT_CAPACITY},
+    {"name": "John", "type": "top_sales", "capacity": AGENT_CAPACITY},
     {"name": "Amy", "type": "customer_service", "capacity": AGENT_CAPACITY},
     {"name": "David", "type": "customer_service", "capacity": AGENT_CAPACITY},
     {"name": "Lisa", "type": "customer_service", "capacity": AGENT_CAPACITY},
@@ -102,19 +102,36 @@ def update_lead_status(lead_id: str, new_status: str):
         if lead["id"] == lead_id:
             old_status = lead["status"]
             lead["status"] = new_status
-            lead["last_updated"] = datetime.now()
+            current_time = datetime.now()
+            lead["last_updated"] = current_time
             
-            # If changing to Success, remove from agent load
+            # Reset timing based on status change
             if new_status == "Success":
+                # Record completion time and freeze timer
+                lead["completion_time"] = current_time
+                lead["time_to_complete"] = (current_time - lead["timestamp"]).total_seconds() / 60
                 agent = lead["assigned_agent"]
                 if lead_id in st.session_state.agent_load[agent]:
                     st.session_state.agent_load[agent].remove(lead_id)
             
-            # If changing from Success back to Pending/Rerouted, add back to agent load
-            elif old_status == "Success" and new_status in ["Pending", "Rerouted"]:
-                agent = lead["assigned_agent"]
-                if lead_id not in st.session_state.agent_load[agent]:
-                    st.session_state.agent_load[agent].append(lead_id)
+            elif new_status == "Rerouted":
+                # Reset timer for rerouted leads
+                lead["reroute_timestamp"] = current_time
+                if old_status == "Success":
+                    # If changing from Success back to Rerouted, add back to agent load
+                    agent = lead["assigned_agent"]
+                    if lead_id not in st.session_state.agent_load[agent]:
+                        st.session_state.agent_load[agent].append(lead_id)
+            
+            elif new_status == "Pending":
+                if old_status == "Success":
+                    # If changing from Success back to Pending, add back to agent load
+                    agent = lead["assigned_agent"]
+                    if lead_id not in st.session_state.agent_load[agent]:
+                        st.session_state.agent_load[agent].append(lead_id)
+                elif old_status.startswith("Rerouted"):
+                    # Reset timer when changing from Rerouted to Pending
+                    lead["reroute_timestamp"] = current_time
             
             break
 
@@ -142,6 +159,7 @@ def check_sla():
                 # Update lead
                 lead["assigned_agent"] = new_agent
                 lead["status"] = "Rerouted (SLA Breach)"
+                lead["reroute_timestamp"] = now  # Reset timer for rerouted lead
                 st.session_state.agent_load[new_agent].append(lead["id"])
                 
                 # Log reroute reason
@@ -241,8 +259,33 @@ def run_app():
     if st.session_state.leads:
         df = pd.DataFrame(st.session_state.leads)
         df["SLA Deadline (min)"] = df["type"].apply(lambda t: SLA_RULES[t])
-        df["Time Since Submit (min)"] = df["timestamp"].apply(lambda t: round((datetime.now() - t).total_seconds() / 60, 1))
-        df["SLA Breached"] = df["Time Since Submit (min)"] > df["SLA Deadline (min)"]
+        
+        # Calculate time based on status
+        def calculate_time_since_submit(row):
+            current_time = datetime.now()
+            
+            if row["status"] == "Success":
+                # Show completion time (frozen)
+                if "time_to_complete" in row and pd.notna(row["time_to_complete"]):
+                    return round(row["time_to_complete"], 1)
+                else:
+                    # Fallback for old success records
+                    return round((row.get("completion_time", current_time) - row["timestamp"]).total_seconds() / 60, 1)
+            
+            elif row["status"].startswith("Rerouted"):
+                # Time since reroute (reset timer)
+                if "reroute_timestamp" in row and pd.notna(row["reroute_timestamp"]):
+                    return round((current_time - row["reroute_timestamp"]).total_seconds() / 60, 1)
+                else:
+                    # Fallback: time since last update
+                    return round((current_time - row["last_updated"]).total_seconds() / 60, 1)
+            
+            else:  # Pending status
+                # Normal time since original submission
+                return round((current_time - row["timestamp"]).total_seconds() / 60, 1)
+        
+        df["Time Since Submit (min)"] = df.apply(calculate_time_since_submit, axis=1)
+        df["SLA Breached"] = (df["Time Since Submit (min)"] > df["SLA Deadline (min)"]) & (df["status"] != "Success")
 
         # Manual Status Change Section
         st.subheader("📝 Manual Status Updates")
@@ -281,9 +324,9 @@ def run_app():
                 return ["background-color: #d4edda; color: #155724"] * len(row)  # Green
             elif row["status"].startswith("Rerouted"):
                 return ["background-color: #fff3cd; color: #856404"] * len(row)  # Yellow
-            elif row["SLA Breached"]:
+            elif row["status"] != "Success" and row["SLA Breached"]:
                 return ["background-color: #f8d7da; color: #721c24"] * len(row)  # Red
-            elif row["Time Since Submit (min)"] > 0.8 * row["SLA Deadline (min)"]:
+            elif row["status"] != "Success" and row["Time Since Submit (min)"] > 0.8 * row["SLA Deadline (min)"]:
                 return ["background-color: #ffeaa7; color: #856404"] * len(row)  # Orange warning
             else:
                 return [""] * len(row)  # Default
@@ -294,11 +337,16 @@ def run_app():
         
         # Color legend
         st.markdown("""
-        **📊 Status Legend:**
-        - 🟢 **Green**: Success (completed)
-        - 🟡 **Yellow**: Rerouted due to SLA breach  
+        **📊 Status Legend & Timer Logic:**
+        - 🟢 **Green**: Success (timer shows completion time - frozen)
+        - 🟡 **Yellow**: Rerouted (timer resets from reroute moment)  
         - 🟠 **Orange**: Warning (approaching SLA limit)
         - 🔴 **Red**: SLA breached (immediate attention needed)
+        
+        **⏱️ Timer Behavior:**
+        - **Success**: Shows total time to complete (frozen)
+        - **Rerouted**: Shows time since last reroute (reset)
+        - **Pending**: Shows time since original submission
         """)
 
         breached_count = int(df["SLA Breached"].sum())
@@ -389,5 +437,4 @@ def run_app():
     st.table(pd.DataFrame(agent_load_data))
 
 if __name__ == "__main__":
-
     run_app()
