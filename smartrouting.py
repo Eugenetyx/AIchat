@@ -21,7 +21,7 @@ AGENT_CAPACITY = 5
 
 AGENTS = [
     {"name": "Sarah", "type": "top_sales", "capacity": AGENT_CAPACITY},
-    {"name": "John", "type": "customer_service", "capacity": AGENT_CAPACITY},
+    {"name": "John", "type": "top_sales", "capacity": AGENT_CAPACITY},
     {"name": "Amy", "type": "customer_service", "capacity": AGENT_CAPACITY},
     {"name": "David", "type": "customer_service", "capacity": AGENT_CAPACITY},
     {"name": "Lisa", "type": "customer_service", "capacity": AGENT_CAPACITY},
@@ -46,25 +46,53 @@ if "reroute_history" not in st.session_state:
 # --------------------------
 # Routing Logic (Round Robin)
 # --------------------------
-def route_lead(lead_type: str):
-    num_agents = len(AGENTS) - 1  # exclude AI agent
+def route_lead(lead_type: str, exclude_agent: str = None):
+    """
+    Route lead using round-robin, with option to exclude specific agent
+    Args:
+        lead_type: Hot/Warm/Cold lead type
+        exclude_agent: Agent name to exclude from routing (for rerouting scenarios)
+    """
+    human_agents = [a for a in AGENTS if a["type"] != "ai"]
+    num_agents = len(human_agents)
     attempts = 0
+    
+    # For new leads, use normal round-robin
+    if exclude_agent is None:
+        while attempts < num_agents:
+            agent = AGENTS[st.session_state.round_robin_index]["name"]
+            st.session_state.round_robin_index = (st.session_state.round_robin_index + 1) % num_agents
 
-    while attempts < num_agents:
-        agent = AGENTS[st.session_state.round_robin_index]["name"]
-        st.session_state.round_robin_index = (st.session_state.round_robin_index + 1) % num_agents
+            if len(st.session_state.agent_load[agent]) < AGENT_CAPACITY:
+                return agent
+            attempts += 1
+    
+    # For rerouting: find best available agent excluding current one
+    else:
+        available_agents = []
+        for agent in human_agents:
+            agent_name = agent["name"]
+            if agent_name != exclude_agent and len(st.session_state.agent_load[agent_name]) < AGENT_CAPACITY:
+                available_agents.append((agent_name, len(st.session_state.agent_load[agent_name])))
+        
+        # If we have available agents, pick the least loaded one
+        if available_agents:
+            available_agents.sort(key=lambda x: x[1])  # Sort by load
+            return available_agents[0][0]  # Return least loaded agent
 
-        if len(st.session_state.agent_load[agent]) < AGENT_CAPACITY:
-            return agent
-
-        attempts += 1
-
-    # All full → Cold → AI, Hot/Warm → least loaded human
+    # Fallback: All human agents full or excluded
     if lead_type == "Cold":
         return "AI Agent"
-
-    human_loads = {a["name"]: len(st.session_state.agent_load[a["name"]]) for a in AGENTS if a["type"] != "ai"}
-    return min(human_loads, key=human_loads.get)
+    
+    # For Hot/Warm: find least loaded human (even if over capacity)
+    human_loads = {a["name"]: len(st.session_state.agent_load[a["name"]]) 
+                   for a in human_agents if a["name"] != exclude_agent}
+    
+    if human_loads:
+        return min(human_loads, key=human_loads.get)
+    else:
+        # Edge case: all humans excluded, route to AI
+        return "AI Agent"
 
 # --------------------------
 # Manual Status Update
@@ -107,8 +135,8 @@ def check_sla():
                 if lead["id"] in st.session_state.agent_load[old_agent]:
                     st.session_state.agent_load[old_agent].remove(lead["id"])
                 
-                # Find new agent
-                new_agent = route_lead(lead["type"])
+                # Find new agent (exclude current agent to prevent routing back)
+                new_agent = route_lead(lead["type"], exclude_agent=old_agent)
                 new_agent_type = next(a["type"] for a in AGENTS if a["name"] == new_agent)
                 
                 # Update lead
@@ -133,9 +161,25 @@ def check_sla():
                 st.session_state.reroute_history.append(reroute_record)
 
 # --------------------------
+# Score-based Lead Type Classification
+# --------------------------
+def determine_lead_type(alps_score: int) -> str:
+    """Determine lead type based on ALPS score"""
+    if alps_score >= 71:
+        return "Hot"
+    elif alps_score >= 51:
+        return "Warm"
+    else:
+        return "Cold"
+
+# --------------------------
 # Add Lead
 # --------------------------
-def add_lead(name: str, lead_type: str, alps_score: int = None):
+def add_lead(name: str, alps_score: int, lead_type: str = None):
+    # If lead_type not provided, determine from score
+    if lead_type is None:
+        lead_type = determine_lead_type(alps_score)
+    
     assigned_agent = route_lead(lead_type)
     lead_id = f"Lead_{len(st.session_state.leads) + 1}"
     new_lead = {
@@ -155,10 +199,10 @@ def add_lead(name: str, lead_type: str, alps_score: int = None):
 # Realtime Simulation
 # --------------------------
 def simulate_realtime_lead():
-    lead_type = random.choices(["Hot", "Warm", "Cold"], weights=[0.2, 0.5, 0.3])[0]
+    alps_score = np.random.randint(0, 101)  # 0-100 score range
+    lead_type = determine_lead_type(alps_score)
     name = f"Realtime_{len(st.session_state.leads) + 1}"
-    alps_score = np.random.randint(40, 95)
-    add_lead(name, lead_type, alps_score)
+    add_lead(name, alps_score)
 
 # --------------------------
 # Streamlit UI
@@ -170,14 +214,21 @@ def run_app():
     # Sidebar
     st.sidebar.header("➕ Add Lead Manually")
     lead_name = st.sidebar.text_input("Customer Name")
-    lead_type = st.sidebar.selectbox("Lead Type", ["Hot", "Warm", "Cold"])
+    alps_score = st.sidebar.number_input("ALPS Score (0-100)", min_value=0, max_value=100, value=50)
+    
+    # Show predicted lead type based on score
+    predicted_type = determine_lead_type(alps_score)
+    st.sidebar.info(f"📊 Predicted Lead Type: **{predicted_type}**")
+    st.sidebar.caption("Cold: 0-50 | Warm: 51-70 | Hot: 71-100")
+    
     if st.sidebar.button("Submit Lead") and lead_name:
-        add_lead(lead_name, lead_type)
-        st.sidebar.success(f"✅ {lead_name} ({lead_type}) routed successfully!")
+        add_lead(lead_name, alps_score)
+        st.sidebar.success(f"✅ {lead_name} (Score: {alps_score}, Type: {predicted_type}) routed successfully!")
 
     if st.sidebar.button("Inject Random Lead Now"):
         simulate_realtime_lead()
-        st.sidebar.info("📥 Random lead injected.")
+        last_lead = st.session_state.leads[-1]
+        st.sidebar.info(f"📥 Random lead injected: Score {last_lead['alps_score']} ({last_lead['type']})")
 
     # SLA monitoring
     check_sla()
@@ -214,18 +265,41 @@ def run_app():
                 st.success(f"✅ Updated {lead_id} status to {new_status}")
                 st.rerun()
 
-        # Main leads table
+        # Main leads table with refresh button
         st.subheader("📋 Current Leads")
         
-        def highlight_sla(row):
-            if row["SLA Breached"]:
-                return ["background-color: red; color: white"] * len(row)
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.write(f"**Total Leads:** {len(df)} | **Pending:** {len(df[df['status']=='Pending'])} | **Success:** {len(df[df['status']=='Success'])} | **Rerouted:** {len(df[df['status'].str.contains('Rerouted', na=False)])}")
+        with col2:
+            if st.button("🔄 Refresh Dashboard", key="refresh_main"):
+                st.rerun()
+        
+        def highlight_rows(row):
+            """Apply color coding based on status and SLA"""
+            if row["status"] == "Success":
+                return ["background-color: #d4edda; color: #155724"] * len(row)  # Green
+            elif row["status"].startswith("Rerouted"):
+                return ["background-color: #fff3cd; color: #856404"] * len(row)  # Yellow
+            elif row["SLA Breached"]:
+                return ["background-color: #f8d7da; color: #721c24"] * len(row)  # Red
             elif row["Time Since Submit (min)"] > 0.8 * row["SLA Deadline (min)"]:
-                return ["background-color: orange; color: black"] * len(row)
+                return ["background-color: #ffeaa7; color: #856404"] * len(row)  # Orange warning
             else:
-                return [""] * len(row)
+                return [""] * len(row)  # Default
 
-        st.dataframe(df.style.apply(highlight_sla, axis=1), use_container_width=True)
+        # Display table with enhanced styling
+        styled_df = df.style.apply(highlight_rows, axis=1)
+        st.dataframe(styled_df, use_container_width=True)
+        
+        # Color legend
+        st.markdown("""
+        **📊 Status Legend:**
+        - 🟢 **Green**: Success (completed)
+        - 🟡 **Yellow**: Rerouted due to SLA breach  
+        - 🟠 **Orange**: Warning (approaching SLA limit)
+        - 🔴 **Red**: SLA breached (immediate attention needed)
+        """)
 
         breached_count = int(df["SLA Breached"].sum())
         if breached_count > 0:
@@ -248,17 +322,29 @@ def run_app():
             
             2. **When SLA is Breached**:
                - Lead is automatically removed from current agent's queue
-               - System finds new agent using same routing logic
+               - System finds new agent **excluding current agent** (prevents routing back)
+               - **Priority**: Least loaded available agent first
                - Status changes to "Rerouted (SLA Breach)"
                - Reroute event is logged with full details
             
-            3. **Routing Priority**:
-               - **Round-robin** through available agents first
-               - If all human agents at capacity:
+            3. **Routing Priority for Rerouting**:
+               - **First**: Try least loaded human agent (excluding current)
+               - **If no humans available**:
                  - **Cold leads** → Route to AI Agent
-                 - **Hot/Warm leads** → Route to least loaded human agent
+                 - **Hot/Warm leads** → Route to least loaded human (even if over capacity)
             
-            4. **Agent Types**:
+            4. **New Lead Routing** (Round-Robin):
+               - Cycles through agents: Sarah → John → Amy → David → Lisa → Mike → repeat
+               - Only assigns if agent has capacity (< 5 leads)
+               - If all full: Cold→AI, Hot/Warm→least loaded
+            
+            5. **Score-Based Lead Classification**:
+               - 🔥 **Hot leads**: ALPS Score 71-100 (High conversion potential)
+               - 🔸 **Warm leads**: ALPS Score 51-70 (Medium conversion potential)
+               - ❄️ **Cold leads**: ALPS Score 0-50 (Low conversion potential)
+               - Lead type automatically determined by score
+            
+            6. **Agent Types**:
                - **Top Sales** (Sarah, John): Handle high-value leads
                - **Customer Service** (Amy, David, Lisa, Mike): General support
                - **AI Agent**: Handles overflow, mainly cold leads
@@ -304,4 +390,3 @@ def run_app():
 
 if __name__ == "__main__":
     run_app()
-
