@@ -21,7 +21,7 @@ AGENT_CAPACITY = 5
 
 AGENTS = [
     {"name": "Sarah", "type": "top_sales", "capacity": AGENT_CAPACITY},
-    {"name": "John", "type": "customer_service", "capacity": AGENT_CAPACITY},
+    {"name": "John", "type": "top_sales", "capacity": AGENT_CAPACITY},
     {"name": "Amy", "type": "customer_service", "capacity": AGENT_CAPACITY},
     {"name": "David", "type": "customer_service", "capacity": AGENT_CAPACITY},
     {"name": "Lisa", "type": "customer_service", "capacity": AGENT_CAPACITY},
@@ -233,9 +233,9 @@ def run_app():
     auto_refresh = st.sidebar.checkbox("🔄 Auto Refresh", value=True)
     if auto_refresh:
         refresh_interval = st.sidebar.selectbox(
-            "Refresh Interval", 
-            options=[1, 2, 5, 10, 30], 
-            index=1,  # Default to 2 seconds
+            "Background Refresh Interval", 
+            options=[2, 5, 10, 15, 30], 
+            index=0,  # Default to 2 seconds
             format_func=lambda x: f"{x} seconds"
         )
         
@@ -246,7 +246,7 @@ def run_app():
         if "next_refresh" not in st.session_state:
             st.session_state.next_refresh = time.time() + refresh_interval
         
-        # Check if it's time to refresh
+        # Check if it's time to refresh (only for background updates)
         current_time = time.time()
         if current_time >= st.session_state.next_refresh:
             st.session_state.next_refresh = current_time + refresh_interval
@@ -255,7 +255,7 @@ def run_app():
         
         # Show countdown
         time_left = max(0, st.session_state.next_refresh - current_time)
-        st.sidebar.caption(f"⏰ Auto refresh in: {time_left:.1f}s")
+        st.sidebar.caption(f"⏰ Background refresh in: {time_left:.1f}s")
     else:
         st.sidebar.caption("⚪ Auto refresh disabled")
 
@@ -272,11 +272,15 @@ def run_app():
     if st.sidebar.button("Submit Lead") and lead_name:
         add_lead(lead_name, alps_score)
         st.sidebar.success(f"✅ {lead_name} (Score: {alps_score}, Type: {predicted_type}) routed successfully!")
+        # Instant refresh for immediate feedback
+        st.rerun()
 
     if st.sidebar.button("Inject Random Lead Now"):
         simulate_realtime_lead()
         last_lead = st.session_state.leads[-1]
         st.sidebar.info(f"📥 Random lead injected: Score {last_lead['alps_score']} ({last_lead['type']})")
+        # Instant refresh for immediate feedback
+        st.rerun()
 
     # SLA monitoring
     check_sla()
@@ -336,6 +340,7 @@ def run_app():
                 lead_id = selected_lead.split(" - ")[0]
                 update_lead_status(lead_id, new_status)
                 st.success(f"✅ Updated {lead_id} status to {new_status}")
+                # Instant refresh for immediate feedback
                 st.rerun()
 
         # Main leads table with refresh controls
@@ -471,4 +476,3 @@ def run_app():
 
 if __name__ == "__main__":
     run_app()
-
