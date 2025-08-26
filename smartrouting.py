@@ -229,6 +229,36 @@ def simulate_realtime_lead():
 def run_app():
     st.set_page_config(page_title="Smart Routing + SLA", layout="wide")
 
+    # Auto-refresh configuration in sidebar
+    auto_refresh = st.sidebar.checkbox("🔄 Auto Refresh", value=True)
+    if auto_refresh:
+        refresh_interval = st.sidebar.selectbox(
+            "Refresh Interval", 
+            options=[1, 2, 5, 10, 30], 
+            index=1,  # Default to 2 seconds
+            format_func=lambda x: f"{x} seconds"
+        )
+        
+        # Auto refresh using st.empty placeholder and time-based rerun
+        import time
+        
+        # Initialize refresh timer
+        if "next_refresh" not in st.session_state:
+            st.session_state.next_refresh = time.time() + refresh_interval
+        
+        # Check if it's time to refresh
+        current_time = time.time()
+        if current_time >= st.session_state.next_refresh:
+            st.session_state.next_refresh = current_time + refresh_interval
+            time.sleep(0.1)  # Small delay to prevent rapid refreshing
+            st.rerun()
+        
+        # Show countdown
+        time_left = max(0, st.session_state.next_refresh - current_time)
+        st.sidebar.caption(f"⏰ Auto refresh in: {time_left:.1f}s")
+    else:
+        st.sidebar.caption("⚪ Auto refresh disabled")
+
     # Sidebar
     st.sidebar.header("➕ Add Lead Manually")
     lead_name = st.sidebar.text_input("Customer Name")
@@ -308,14 +338,17 @@ def run_app():
                 st.success(f"✅ Updated {lead_id} status to {new_status}")
                 st.rerun()
 
-        # Main leads table with refresh button
+        # Main leads table with refresh controls
         st.subheader("📋 Current Leads")
         
-        col1, col2 = st.columns([3, 1])
+        col1, col2, col3 = st.columns([2, 1, 1])
         with col1:
             st.write(f"**Total Leads:** {len(df)} | **Pending:** {len(df[df['status']=='Pending'])} | **Success:** {len(df[df['status']=='Success'])} | **Rerouted:** {len(df[df['status'].str.contains('Rerouted', na=False)])}")
         with col2:
-            if st.button("🔄 Refresh Dashboard", key="refresh_main"):
+            refresh_status = "🟢 Auto" if auto_refresh else "⚪ Manual"
+            st.write(f"**Refresh Mode:** {refresh_status}")
+        with col3:
+            if st.button("🔄 Manual Refresh", key="refresh_main"):
                 st.rerun()
         
         def highlight_rows(row):
