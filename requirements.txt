@@ -5,3 +5,7 @@ python-dateutil
 joblib
 dill
 cloudpickle
+streamlit
+pandas
+numpy
+streamlit-autorefresh
