@@ -294,31 +294,62 @@ def run_app():
         df = pd.DataFrame(st.session_state.leads)
         df["SLA Deadline (min)"] = df["type"].apply(lambda t: SLA_RULES[t])
         
-        # Calculate time based on status
-        def calculate_time_since_submit(row):
+        # Calculate time based on status with countdown format
+        def calculate_time_display(row):
             current_time = datetime.now()
             
             if row["status"] == "Success":
-                # Show completion time (frozen)
+                # Show completion time (frozen) in MM:SS format
                 if "time_to_complete" in row and pd.notna(row["time_to_complete"]):
-                    return round(row["time_to_complete"], 1)
+                    total_seconds = row["time_to_complete"] * 60
                 else:
                     # Fallback for old success records
-                    return round((row.get("completion_time", current_time) - row["timestamp"]).total_seconds() / 60, 1)
+                    total_seconds = (row.get("completion_time", current_time) - row["timestamp"]).total_seconds()
+                
+                minutes = int(total_seconds // 60)
+                seconds = int(total_seconds % 60)
+                return f"{minutes:02d}:{seconds:02d}"
             
             elif row["status"].startswith("Rerouted"):
-                # Time since reroute (reset timer)
+                # Time since reroute in MM:SS format
                 if "reroute_timestamp" in row and pd.notna(row["reroute_timestamp"]):
-                    return round((current_time - row["reroute_timestamp"]).total_seconds() / 60, 1)
+                    total_seconds = (current_time - row["reroute_timestamp"]).total_seconds()
                 else:
                     # Fallback: time since last update
-                    return round((current_time - row["last_updated"]).total_seconds() / 60, 1)
+                    total_seconds = (current_time - row["last_updated"]).total_seconds()
+                
+                minutes = int(total_seconds // 60)
+                seconds = int(total_seconds % 60)
+                return f"{minutes:02d}:{seconds:02d}"
             
             else:  # Pending status
-                # Normal time since original submission
-                return round((current_time - row["timestamp"]).total_seconds() / 60, 1)
+                # Time since original submission in MM:SS format
+                total_seconds = (current_time - row["timestamp"]).total_seconds()
+                minutes = int(total_seconds // 60)
+                seconds = int(total_seconds % 60)
+                return f"{minutes:02d}:{seconds:02d}"
         
-        df["Time Since Submit (min)"] = df.apply(calculate_time_since_submit, axis=1)
+        # Calculate numeric time for SLA checks
+        def calculate_numeric_time(row):
+            current_time = datetime.now()
+            
+            if row["status"] == "Success":
+                if "time_to_complete" in row and pd.notna(row["time_to_complete"]):
+                    return row["time_to_complete"]
+                else:
+                    return (row.get("completion_time", current_time) - row["timestamp"]).total_seconds() / 60
+            
+            elif row["status"].startswith("Rerouted"):
+                if "reroute_timestamp" in row and pd.notna(row["reroute_timestamp"]):
+                    return (current_time - row["reroute_timestamp"]).total_seconds() / 60
+                else:
+                    return (current_time - row["last_updated"]).total_seconds() / 60
+            
+            else:  # Pending
+                return (current_time - row["timestamp"]).total_seconds() / 60
+        
+        df["Timer (MM:SS)"] = df.apply(calculate_time_display, axis=1)
+        df["Time Since Submit (min)"] = df.apply(calculate_numeric_time, axis=1)
         df["SLA Breached"] = (df["Time Since Submit (min)"] > df["SLA Deadline (min)"]) & (df["status"] != "Success")
 
         # Manual Status Change Section
@@ -351,7 +382,10 @@ def run_app():
             st.write(f"**Total Leads:** {len(df)} | **Pending:** {len(df[df['status']=='Pending'])} | **Success:** {len(df[df['status']=='Success'])} | **Rerouted:** {len(df[df['status'].str.contains('Rerouted', na=False)])}")
         with col2:
             refresh_status = "🟢 Auto" if auto_refresh else "⚪ Manual"
-            st.write(f"**Refresh Mode:** {refresh_status}")
+            if auto_refresh:
+                st.write(f"**Refresh:** {refresh_status} ({refresh_interval}s)")
+            else:
+                st.write(f"**Refresh:** {refresh_status}")
         with col3:
             if st.button("🔄 Manual Refresh", key="refresh_main"):
                 st.rerun()
@@ -382,9 +416,10 @@ def run_app():
         - 🔴 **Red**: SLA breached (immediate attention needed)
         
         **⏱️ Timer Behavior:**
-        - **Success**: Shows total time to complete (frozen)
-        - **Rerouted**: Shows time since last reroute (reset)
-        - **Pending**: Shows time since original submission
+        - **Success**: Shows total completion time (⏹️ frozen at MM:SS)
+        - **Rerouted**: Shows time since reroute (🔄 reset to 00:00)
+        - **Pending**: Shows time since original submission (▶️ running)
+        - **Format**: MM:SS (minutes:seconds countdown)
         """)
 
         breached_count = int(df["SLA Breached"].sum())
@@ -431,8 +466,8 @@ def run_app():
                - Lead type automatically determined by score
             
             6. **Agent Types**:
-               - **Top Sales** (Sarah, John): Handle high-value leads
-               - **Customer Service** (Amy, David, Lisa, Mike): General support
+               - **Top Sales** (Sarah): Handle high-value leads
+               - **Customer Service** (John, Amy, David, Lisa, Mike): General support
                - **AI Agent**: Handles overflow, mainly cold leads
             """)
         
@@ -476,4 +511,3 @@ def run_app():
 
 if __name__ == "__main__":
     run_app()
-
